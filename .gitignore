@@ -1,0 +1,28 @@
+# Compiled binaries
+netagent_linux
+*.exe
+
+# Python __pycache__
+__pycache__/
+*.pyc
+*.pyo
+foreign_sdk/
+configs/
+
+# Go build cache
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config with credentials — DO NOT UPLOAD
+go/python/configs/foreign_config.py
+
+# Temp
+*.log
