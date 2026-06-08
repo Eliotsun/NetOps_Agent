@@ -512,7 +512,7 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 		// 检测 ---- More ----（Cisco）或 --More--（Fortinet/H3C等）并发送空格翻页
 		moreFound := false
 		for _, line := range lines {
-			if strings.Contains(line, "---- More ----") || strings.Contains(line, "--More--") || strings.Contains(line, "<--- More --->") {
+			if strings.Contains(line, "---- More ----") || strings.Contains(line, "--More--") || strings.Contains(line, "<--- More --->") || strings.Contains(line, "---(more)---") {
 				pos = buf.Len()
 				stdin.Write([]byte(" "))
 				time.Sleep(10 * time.Millisecond)
@@ -556,7 +556,21 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 			time.Sleep(200 * time.Millisecond)
 			outputNow := buf.String()
 			if len(outputNow) > len(output) {
-				// 200ms 内还有新数据到达 → 继续等，不着急返回
+				// 有新数据到达，但重新验证提示符是否仍在末尾
+				// 如果在，说明只是零星回显/控制字符，直接返回
+				rest := outputNow[pos:]
+				cleanRest := stripANSI(strings.ReplaceAll(rest, "\r", ""))
+				restLines := strings.Split(cleanRest, "\n")
+				for i := len(restLines) - 1; i >= 0; i-- {
+					trimmed := strings.TrimSpace(restLines[i])
+					if trimmed != "" {
+						if (len(prompt) <= 1 && trimmed == prompt) ||
+							(len(prompt) > 1 && (trimmed == prompt || strings.HasSuffix(trimmed, prompt))) {
+							return true // 提示符仍在末尾，输出已完整
+						}
+						break
+					}
+				}
 				continue
 			}
 			return true
@@ -673,7 +687,7 @@ func cleanOutputSimple(output, cmd, prompt string) string {
 		}
 
 		// 过滤分页标记 (<--- More --->, ---- More ----, --More--)
-		if strings.Contains(trimmed, "<--- More --->") ||
+		if strings.Contains(trimmed, "<--- More --->") || strings.Contains(trimmed, "---(more)---") ||
 			strings.Contains(trimmed, "---- More ----") ||
 			strings.Contains(trimmed, "--More--") {
 			continue

@@ -26,3 +26,4 @@ go/python/configs/foreign_config.py
 
 # Temp
 *.log
+*.txt

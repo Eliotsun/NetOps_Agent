@@ -22,14 +22,21 @@
 
 ### 编译
 
+> **务必确认目标服务器架构再编译，选错架构产出的二进制无法运行（报 Exec format error）。**
+
 ```bash
 git clone https://github.com/你的用户名/netagent.git
 cd netagent
 
-# 编译 Linux ARM64（如华为云 ARM 服务器）
+# 先确认服务器架构
+#   $ uname -m
+#   aarch64 → 选 ARM64
+#   x86_64  → 选 AMD64
+
+# 编译 Linux ARM64（aarch64，如华为云 ARM 服务器）
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o netagent_linux main.go
 
-# 编译 Linux AMD64（如普通 x86 服务器）
+# 编译 Linux AMD64（x86_64，如普通 x86 服务器）
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o netagent_linux main.go
 ```
 

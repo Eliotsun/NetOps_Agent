@@ -1,24 +1,3 @@
-"""
-华为网络设备指令采集工具
-
-用法示例:
-    from device_collector import collect_device_commands
-
-    success, results = collect_device_commands(
-        host='10.202.66.110',
-        username='abcadmin',
-        password='#Vp417938kb',
-        commands=['screen-len 0 temp', 'dis current-configuration'],
-        encoding='UTF-8',
-        timeout=30
-    )
-
-    if success:
-        for r in results:
-            print("[{}] ({}s)".format(r['command'], r['duration_seconds']))
-            print(r['output'])
-"""
-
 import subprocess
 import os
 import re
@@ -99,8 +78,8 @@ def collect_device_commands(
     args.extend(['-timeout', str(timeout)])
     if enable:
         args.extend(['-enable'])
-    if enable_pass:
-        args.extend(['-enable-pass', enable_pass])
+        if enable_pass:
+            args.extend(['-enable-pass', enable_pass])
 
     logger.info("Executing: {}".format(' '.join(args)))
 
@@ -229,13 +208,13 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     success, results = collect_device_commands(
-        host='10.204.30.250',
-        username='wgsedf',
-        password='test',
-        commands=['terminal length 0', 'dis version'],
+        host='10.203.251.7',
+        username='admin',
+        password='password',
+        commands=['show version', 'show running-config'],
         encoding='UTF-8',
-        timeout=30,
-        enable_pass="EXFW01@GASD!!@#"
+        timeout=120,
+        enable_pass="Enable20!9"
     )
 
     if success:
