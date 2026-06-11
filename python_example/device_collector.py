@@ -101,6 +101,12 @@ def collect_device_commands(
         stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout + 10)
         stdout = _safe_decode(stdout_bytes) if stdout_bytes else ''
         stderr = _safe_decode(stderr_bytes) if stderr_bytes else ''
+        # 打印 Go 二进制 stderr（enable 调试日志等），方便定位问题
+        if stderr:
+            for line in stderr.split('\n'):
+                line = line.strip()
+                if line:
+                    print("[stderr] {}".format(line))
     except subprocess.TimeoutExpired:
         proc.kill()
         stdout_bytes, stderr_bytes = proc.communicate()
@@ -208,12 +214,13 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     success, results = collect_device_commands(
-        host='10.203.251.7',
-        username='admin',
-        password='password',
-        commands=['show version', 'show running-config'],
+        host='10.203.251.65',
+        username='test',
+        password='xxxxxx',
+        commands=['terminal length 0', 'show version', 'show running-config', 'show ip route', 'show ipv6 route'],
         encoding='UTF-8',
         timeout=120,
+        enable = True,
         enable_pass="Enable20!9"
     )
 

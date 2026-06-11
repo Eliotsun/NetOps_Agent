@@ -307,31 +307,56 @@ func executeSSH(host string, port int, username string, password string, enableP
 	fmt.Fprintf(os.Stderr, "[LOGIN] Detected prompt: '%s'\n", prompt)
 
 	// ---- Enable 提权 ----
-	if enable && strings.HasSuffix(prompt, ">") {
+	if enable {
 		fmt.Fprintf(os.Stderr, "[ENABLE] User mode detected (prompt ends with '>'), sending enable...\n")
 		beforeLen := buf.Len()
-		stdin.Write([]byte("enable\r\n"))
-		time.Sleep(2 * time.Second)
+		stdin.Write([]byte("enable\n"))
 
-		enableOutput := buf.String()[beforeLen:]
-		lowerEnable := strings.ToLower(enableOutput)
-		if strings.Contains(lowerEnable, "password:") || strings.Contains(lowerEnable, "password：") {
-			if enablePass == "" {
-				fmt.Fprintf(os.Stderr, "[ENABLE] Device requires enable password but -enable-pass not provided\n")
-				return nil, fmt.Errorf("enable password required but not provided for %s@%s", username, host)
+		enableStart := time.Now()
+		enableTimeout := 10 * time.Second
+		passwordSent := false
+		enableSuccess := false
+
+		for time.Since(enableStart) < enableTimeout {
+			time.Sleep(200 * time.Millisecond)
+
+			currentOutput := buf.String()
+			newSinceCmd := currentOutput[beforeLen:]
+			lowerNew := strings.ToLower(newSinceCmd)
+
+			// Detect password prompt and send password
+			if !passwordSent && (strings.Contains(lowerNew, "password:") || strings.Contains(lowerNew, "password：")) {
+				if enablePass == "" {
+					fmt.Fprintf(os.Stderr, "[ENABLE] Device requires enable password but -enable-pass not provided\n")
+					return nil, fmt.Errorf("enable password required but not provided for %s@%s", username, host)
+				}
+				fmt.Fprintf(os.Stderr, "[ENABLE] Sending enable password...\n")
+				stdin.Write([]byte(enablePass + "\n"))
+				passwordSent = true
+				continue
 			}
-			fmt.Fprintf(os.Stderr, "[ENABLE] Sending enable password...\n")
-			stdin.Write([]byte(enablePass + "\r\n"))
-			time.Sleep(2 * time.Second)
+
+			// Check if prompt changed (no longer ends with >)
+			candidate := extractPrompt(currentOutput)
+			if !strings.HasSuffix(candidate, ">") && candidate != prompt {
+				fmt.Fprintf(os.Stderr, "[ENABLE] Prompt changed: '%s'\n", candidate)
+				prompt = candidate
+				enableSuccess = true
+				break
+			}
+
+			// Log waiting status every 2 seconds
+			elapsed := time.Since(enableStart).Seconds()
+			if elapsed >= 2 && int(elapsed)%2 == 0 {
+				fmt.Fprintf(os.Stderr, "[ENABLE] Waiting for enable to complete, %.0fs elapsed\n", elapsed)
+			}
 		}
 
-		newPrompt := extractPrompt(buf.String())
-		fmt.Fprintf(os.Stderr, "[ENABLE] New prompt: '%s'\n", newPrompt)
-		if strings.HasSuffix(newPrompt, ">") {
-			fmt.Fprintf(os.Stderr, "[ENABLE] Still in user mode after enable, aborting\n")
-			return nil, fmt.Errorf("failed to enter privilege mode for %s@%s", username, host)
+		if !enableSuccess {
+			finalPrompt := extractPrompt(buf.String())
+			fmt.Fprintf(os.Stderr, "[ENABLE] Enable timeout (%s), extracted prompt: '%s'\n", time.Since(enableStart).Round(time.Second), finalPrompt)
+			prompt = finalPrompt
 		}
-		prompt = newPrompt
 	}
 	// ---- Enable 提权结束 ----
 
@@ -478,8 +503,8 @@ func hasAuthFailureStrict(output string) string {
 			return lineTrim
 		}
 		for _, phrase := range []string{"authentication failed", "authentication failure"} {
-			idx := strings.Index(lowerLine, phrase)
-			if idx >= 0 && (idx == 0 || lowerLine[idx-1] == ' ') {
+			// 只匹配行首，避免配置内容（如 "security authentication failure rate 3"）误命中
+			if strings.HasPrefix(lowerLine, phrase) {
 				return lineTrim
 			}
 		}
@@ -512,7 +537,7 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 		// 检测 ---- More ----（Cisco）或 --More--（Fortinet/H3C等）并发送空格翻页
 		moreFound := false
 		for _, line := range lines {
-			if strings.Contains(line, "---- More ----") || strings.Contains(line, "--More--") || strings.Contains(line, "<--- More --->") || strings.Contains(line, "---(more)---") {
+			if strings.Contains(line, "---- More ----") || strings.Contains(line, "--More--") || strings.Contains(line, "<--- More --->") || strings.Contains(line, "---(more)---") || strings.Contains(line, "---(more)---") {
 				pos = buf.Len()
 				stdin.Write([]byte(" "))
 				time.Sleep(10 * time.Millisecond)
@@ -687,7 +712,7 @@ func cleanOutputSimple(output, cmd, prompt string) string {
 		}
 
 		// 过滤分页标记 (<--- More --->, ---- More ----, --More--)
-		if strings.Contains(trimmed, "<--- More --->") || strings.Contains(trimmed, "---(more)---") ||
+		if strings.Contains(trimmed, "<--- More --->") || strings.Contains(trimmed, "---(more)---") || strings.Contains(trimmed, "---(more)---") ||
 			strings.Contains(trimmed, "---- More ----") ||
 			strings.Contains(trimmed, "--More--") {
 			continue

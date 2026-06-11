@@ -1,5 +1,4 @@
 # Compiled binaries
-netagent_linux
 *.exe
 
 # Python __pycache__
