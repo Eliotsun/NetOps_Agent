@@ -1,7 +1,7 @@
 # NetOps Agent
 
 网络设备 SSH 指令采集工具。通过 SSH 登录网络设备，批量执行指令并采集回显。Go 编译为单二进制负责 SSH 交互，Python 负责参数组装和结果解析。
-支持采集设备：华为、华三、思科、飞塔
+支持采集设备：华为、华三、思科、飞塔、Juniper
 
 ## 架构
 
@@ -121,9 +121,10 @@ if success:
 | 品牌 | 关闭分页指令 | 需要 Enable | 分页格式 |
 |------|-------------|-----------|---------|
 | 华为 | `screen-len 0 temp` | 否 | `---- More ----` |
-| H3C | `screen-length disable` | 否 | `---- More ----` |
+| H3C | `screen-length disable`（RBM 设备可省略） | 否 | `---- More ----` |
 | Cisco (IOS/ASA) | `terminal length 0` | 是 | `--More--` / `<--- More --->` |
 | 飞塔 | 无需关闭分页 | 否 | `--More--` |
+| Juniper | 无需关闭分页（用 `\| no-more` 后缀） | 否 | `---(more)---` |
 
 ## 命令行参数
 
@@ -217,7 +218,7 @@ netagent/
 > 注意：部分 IOS XE 设备即使初始提示符为 `#`，权限仍可能不足（如 `show running-config` 被拒）。
 > 传了 `-enable` 一定会执行提权流程，不要根据 `>` / `#` 做判断。
 
-### Cisco 采集注意事项
+### 采集注意事项
 
 | 问题 | 原因 | 解决方案 |
 |------|------|---------|
@@ -226,6 +227,7 @@ netagent/
 | 配置内容误判为权限错误 | `re.search(r'% Invalid input', output)` 全文匹配 | 加 `^` 行首锚定 + `re.MULTILINE` |
 | 配置含 `authentication failure` 中断采集 | `hasAuthFailureStrict` 检测到配置行中的关键字 | 改为 `HasPrefix` 行首匹配 |
 | 设备无输出（no output received） | `ECHO: 0` 导致部分设备不发送 banner | `ECHO` 保持为 `1` |
+| H3C RBM 设备 `screen-length disable` 超时 | 提示符前含 NULL 字节（`\x00`），导致 `waitForPrompt` 匹配不上 | `extractPrompt` 中过滤 NULL 字节 |
 
 ### 权限错误检测
 

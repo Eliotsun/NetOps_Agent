@@ -308,7 +308,7 @@ func executeSSH(host string, port int, username string, password string, enableP
 
 	// ---- Enable 提权 ----
 	if enable {
-		fmt.Fprintf(os.Stderr, "[ENABLE] User mode detected (prompt ends with '>'), sending enable...\n")
+		fmt.Fprintf(os.Stderr, "[ENABLE] Sending enable command...\n")
 		beforeLen := buf.Len()
 		stdin.Write([]byte("enable\n"))
 
@@ -360,6 +360,11 @@ func executeSSH(host string, port int, username string, password string, enableP
 	}
 	// ---- Enable 提权结束 ----
 
+	fmt.Fprintf(os.Stderr, "[AWAKE] Wake before commands...\n")
+	stdin.Write([]byte("\r\n"))
+	time.Sleep(2 * time.Second)
+	fmt.Fprintf(os.Stderr, "[AWAKE] Wake done.\n")
+
 	results := make([]result, 0, len(commands))
 
 	prevLen := buf.Len()
@@ -378,10 +383,12 @@ func executeSSH(host string, port int, username string, password string, enableP
 			continue
 		}
 
-		_, err := fmt.Fprintf(stdin, "%s\r\n", cmd)
-		if err != nil {
-			return nil, fmt.Errorf("stdin write failed: %v", err)
+		// Send char by char (H3C RBM bulk-input workaround)
+		for _, ch := range cmd {
+			stdin.Write([]byte(string(ch)))
+			time.Sleep(3 * time.Millisecond)
 		}
+		stdin.Write([]byte("\r\n"))
 		fmt.Fprintf(os.Stderr, "[DEBUG] Sent: %s\n", cmd)
 
 		promptFound := waitForPrompt(&buf, stdin, prompt, buf.Len(), time.Duration(timeout)*time.Second)
@@ -439,6 +446,8 @@ func executeSSH(host string, port int, username string, password string, enableP
 
 func extractPrompt(output string) string {
 	clean := stripANSI(output)
+	// Remove null bytes (H3C RBM devices may embed \x00 before prompt)
+	clean = strings.ReplaceAll(clean, "\x00", "")
 	lines := strings.Split(clean, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -516,17 +525,22 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 	startTime := time.Now()
 	pos := startFrom
 	lastHeartbeat := startTime
+	fmt.Fprintf(os.Stderr, "[DBG_WFP] prompt=%q timeout=%.0fs startFrom=%d\n", prompt, timeout.Seconds(), startFrom)
 
 	for time.Since(startTime) < timeout {
 		output := buf.String()
 		if len(output) <= pos {
 			time.Sleep(100 * time.Millisecond)
-			if time.Since(lastHeartbeat) >= 5*time.Second {
-				currentBufLen := buf.Len()
-				fmt.Fprintf(os.Stderr, "[WAIT] waiting for prompt, %.0fs elapsed, bufLen=%d\n",
-					time.Since(startTime).Seconds(), currentBufLen)
-				lastHeartbeat = time.Now()
-			}
+			if time.Since(lastHeartbeat) >= 2*time.Second {
+			currentBufLen := buf.Len()
+			elapsed := time.Since(startTime).Seconds()
+			// Show last 300 bytes of buffer for debugging
+			tail := output
+			if len(tail) > 300 { tail = tail[len(tail)-300:] }
+			cleanTail := stripANSI(strings.ReplaceAll(tail, "\r", ""))
+			fmt.Fprintf(os.Stderr, "[DBG] %.0fs bufLen=%d content=%q\n", elapsed, currentBufLen, cleanTail)
+			lastHeartbeat = time.Now()
+		}
 			continue
 		}
 		newOutput := output[pos:]
@@ -537,7 +551,7 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 		// 检测 ---- More ----（Cisco）或 --More--（Fortinet/H3C等）并发送空格翻页
 		moreFound := false
 		for _, line := range lines {
-			if strings.Contains(line, "---- More ----") || strings.Contains(line, "--More--") || strings.Contains(line, "<--- More --->") || strings.Contains(line, "---(more)---") || strings.Contains(line, "---(more)---") {
+			if strings.Contains(line, "---- More ----") || strings.Contains(line, "--More--") || strings.Contains(line, "<--- More --->") || strings.Contains(line, "---(more)---") || strings.Contains(line, "---(more)---") || strings.Contains(line, "---(more)---") || strings.Contains(line, "---(more)---") {
 				pos = buf.Len()
 				stdin.Write([]byte(" "))
 				time.Sleep(10 * time.Millisecond)
@@ -712,7 +726,7 @@ func cleanOutputSimple(output, cmd, prompt string) string {
 		}
 
 		// 过滤分页标记 (<--- More --->, ---- More ----, --More--)
-		if strings.Contains(trimmed, "<--- More --->") || strings.Contains(trimmed, "---(more)---") || strings.Contains(trimmed, "---(more)---") ||
+		if strings.Contains(trimmed, "<--- More --->") || strings.Contains(trimmed, "---(more)---") || strings.Contains(trimmed, "---(more)---") || strings.Contains(trimmed, "---(more)---") || strings.Contains(trimmed, "---(more)---") ||
 			strings.Contains(trimmed, "---- More ----") ||
 			strings.Contains(trimmed, "--More--") {
 			continue
