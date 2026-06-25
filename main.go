@@ -327,8 +327,10 @@ func executeSSH(host string, port int, username string, password string, enableP
 			// Detect password prompt and send password
 			if !passwordSent && (strings.Contains(lowerNew, "password:") || strings.Contains(lowerNew, "password：")) {
 				if enablePass == "" {
-					fmt.Fprintf(os.Stderr, "[ENABLE] Device requires enable password but -enable-pass not provided\n")
-					return nil, fmt.Errorf("enable password required but not provided for %s@%s", username, host)
+					fmt.Fprintf(os.Stderr, "[ENABLE] Device requests enable password but none provided, sending empty line and continuing\n")
+					stdin.Write([]byte("\n"))
+					passwordSent = true
+					continue
 				}
 				fmt.Fprintf(os.Stderr, "[ENABLE] Sending enable password...\n")
 				stdin.Write([]byte(enablePass + "\n"))
