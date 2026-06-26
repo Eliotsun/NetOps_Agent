@@ -385,18 +385,14 @@ func executeSSH(host string, port int, username string, password string, enableP
 			continue
 		}
 
-		// Send char by char (H3C RBM bulk-input workaround)
-		for _, ch := range cmd {
-			stdin.Write([]byte(string(ch)))
-			time.Sleep(3 * time.Millisecond)
-		}
-		stdin.Write([]byte("\r\n"))
+		cmdStart := buf.Len()
+		stdin.Write([]byte(cmd + "\r\n"))
 		fmt.Fprintf(os.Stderr, "[DEBUG] Sent: %s\n", cmd)
 
 		promptFound := waitForPrompt(&buf, stdin, prompt, buf.Len(), time.Duration(timeout)*time.Second)
 		if !promptFound {
 			// waitForPrompt 可能因检测到认证失败而提前返回 false
-			afterOutput := buf.String()[prevLen:]
+			afterOutput := buf.String()[cmdStart:]
 			if failLine := hasAuthFailureStrict(afterOutput); failLine != "" {
 				// 输出设备返回的完整认证失败信息
 				for _, l := range strings.Split(afterOutput, "\n") {
@@ -414,7 +410,7 @@ func executeSSH(host string, port int, username string, password string, enableP
 
 		fmt.Fprintf(os.Stderr, "[EXEC_TIME] %s: %.2fs\n", cmd, elapsed.Seconds())
 
-		output := buf.String()[prevLen:]
+		output := buf.String()[cmdStart:]
 
 		if encoding == "GBK" {
 			output = convertGBKToUTF8(output)
@@ -703,35 +699,42 @@ func cleanOutputSimple(output, cmd, prompt string) string {
 	output = stripANSI(output)
 
 	lines := strings.Split(output, "\n")
-	result := make([]string, 0)
-	started := false
 
-	for _, line := range lines {
+	// 找到最后一个提示符位置（而非第一个），
+	// 避免 Juniper cluster 回显中出现的提示符提前截断输出
+	lastPromptIdx := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == prompt || strings.HasSuffix(trimmed, prompt) {
+			lastPromptIdx = i
+		}
+	}
+
+	result := make([]string, 0)
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		if !started {
+		if len(result) == 0 {
 			if trimmed == "" || strings.HasPrefix(trimmed, "*") ||
 				strings.HasPrefix(trimmed, "Info:") ||
 				strings.HasPrefix(trimmed, "The max") ||
 				strings.HasPrefix(trimmed, "The current") {
 				continue
 			}
-			started = true
 			result = append(result, trimmed)
 			continue
-		}
-
-		// 检测提示符终止位置
-		if trimmed == prompt || strings.HasSuffix(trimmed, prompt) {
-			result = append(result, trimmed)
-			break
 		}
 
 		// 过滤分页标记 (<--- More --->, ---- More ----, --More--)
-		if strings.Contains(trimmed, "<--- More --->") || strings.Contains(trimmed, "---(more)---") || strings.Contains(trimmed, "---(more)---") || strings.Contains(trimmed, "---(more)---") || strings.Contains(trimmed, "---(more)---") ||
+		if strings.Contains(trimmed, "<--- More --->") || strings.Contains(trimmed, "---(more)---") ||
 			strings.Contains(trimmed, "---- More ----") ||
 			strings.Contains(trimmed, "--More--") {
 			continue
+		}
+
+		if i == lastPromptIdx {
+			result = append(result, trimmed)
+			break
 		}
 
 		if trimmed != "" {
