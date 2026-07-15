@@ -245,6 +245,10 @@ func executeSSH(host string, port int, username string, password string, enableP
 		if extractPrompt(loginOutput) != ">" {
 			break
 		}
+		// Firepower FTD: 提示符就是 ">"，通过登录 Banner 中的 "FX-OS" 识别
+		if strings.Contains(loginOutput, "FX-OS") {
+			break
+		}
 	}
 
 	// 10 秒后如果没有任何设备输出 → 连接有问题
@@ -303,11 +307,17 @@ func executeSSH(host string, port int, username string, password string, enableP
 		}
 	}
 
+	// 自动检测是否为 Firepower FTD 设备（通过登录 Banner 中的 FX-OS 特征识别）
+	firepower := isFirepowerDevice(currentOutput)
+	if firepower {
+		fmt.Fprintf(os.Stderr, "[LOGIN] Detected Firepower FTD device from banner\n")
+	}
+
 	prompt := extractPrompt(currentOutput)
 	fmt.Fprintf(os.Stderr, "[LOGIN] Detected prompt: '%s'\n", prompt)
 
-	// ---- Enable 提权 ----
-	if enable {
+	// ---- Enable 提权（Firepower FTD 无 enable 命令，跳过） ----
+	if enable && !firepower {
 		fmt.Fprintf(os.Stderr, "[ENABLE] Sending enable command...\n")
 		beforeLen := buf.Len()
 		stdin.Write([]byte("enable\n"))
@@ -389,7 +399,7 @@ func executeSSH(host string, port int, username string, password string, enableP
 		stdin.Write([]byte(cmd + "\r\n"))
 		fmt.Fprintf(os.Stderr, "[DEBUG] Sent: %s\n", cmd)
 
-		promptFound := waitForPrompt(&buf, stdin, prompt, buf.Len(), time.Duration(timeout)*time.Second)
+		promptFound := waitForPrompt(&buf, stdin, prompt, buf.Len(), time.Duration(timeout)*time.Second, firepower)
 		if !promptFound {
 			// waitForPrompt 可能因检测到认证失败而提前返回 false
 			afterOutput := buf.String()[cmdStart:]
@@ -416,7 +426,7 @@ func executeSSH(host string, port int, username string, password string, enableP
 			output = convertGBKToUTF8(output)
 		}
 
-		output = cleanOutputSimple(output, cmd, prompt)
+		output = cleanOutputSimple(output, cmd, prompt, firepower)
 
 		results = append(results, result{Command: cmd, Output: output})
 
@@ -460,6 +470,21 @@ var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 func stripANSI(input string) string {
 	return ansiRegexp.ReplaceAllString(input, "")
+}
+
+// isFirepowerDevice 通过登录 Banner 自动检测是否为 Firepower FTD 设备
+func isFirepowerDevice(output string) bool {
+	indicators := []string{
+		"FX-OS",
+		"Firepower Extensible Operating System",
+		"Threat Defense",
+	}
+	for _, ind := range indicators {
+		if strings.Contains(output, ind) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasAuthFailure 检测输出中是否包含设备返回的认证失败信息或密码输入提示
@@ -519,7 +544,7 @@ func hasAuthFailureStrict(output string) string {
 	return ""
 }
 
-func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom int, timeout time.Duration) bool {
+func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom int, timeout time.Duration, firepower bool) bool {
 	startTime := time.Now()
 	pos := startFrom
 	lastHeartbeat := startTime
@@ -570,23 +595,30 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 			}
 		}
 
-		// 检测提示符
-		promptFound := false
-		for i := len(lines) - 1; i >= 0; i-- {
-			line := strings.TrimSpace(lines[i])
-			if line != "" {
-				if len(prompt) <= 1 {
-					if line == prompt {
-						promptFound = true
+			// 检测提示符
+			promptFound := false
+			for i := len(lines) - 1; i >= 0; i-- {
+				line := strings.TrimSpace(lines[i])
+				if line != "" {
+					if firepower && prompt == ">" {
+						// Firepower FTD: stability detection:
+						// see ">" -> wait 500ms -> let 200ms post-check verify
+						if line == ">" {
+							time.Sleep(500 * time.Millisecond)
+							promptFound = true
+						}
+					} else if len(prompt) <= 1 {
+						if line == prompt {
+							promptFound = true
+						}
+					} else {
+						if line == prompt || strings.HasSuffix(line, prompt) {
+							promptFound = true
+						}
 					}
-				} else {
-					if line == prompt || strings.HasSuffix(line, prompt) {
-						promptFound = true
-					}
+					break
 				}
-				break
 			}
-		}
 
 		if promptFound {
 			// 找到提示符后等 200ms 让设备数据收全
@@ -638,7 +670,12 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 			for i := len(lines) - 1; i >= 0; i-- {
 				line := strings.TrimSpace(lines[i])
 				if line != "" {
-					if len(prompt) <= 1 {
+					if firepower && prompt == ">" {
+						if line == ">" {
+							fmt.Fprintf(os.Stderr, "[WAIT_PROMPT] Device woken by \\r, prompt found: '%s'\n", line)
+							return true
+						}
+					} else if len(prompt) <= 1 {
 						if line == prompt {
 							fmt.Fprintf(os.Stderr, "[WAIT_PROMPT] Device woken by \\r, prompt found: '%s'\n", line)
 							return true
@@ -683,7 +720,7 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 	return false
 }
 
-func cleanOutputSimple(output, cmd, prompt string) string {
+func cleanOutputSimple(output, cmd, prompt string, firepower bool) string {
 	// 处理退格符 \b：移除 \b 及其前面的字符
 	for strings.ContainsRune(output, '\b') {
 		idx := strings.IndexRune(output, '\b')
@@ -703,10 +740,20 @@ func cleanOutputSimple(output, cmd, prompt string) string {
 	// 找到最后一个提示符位置（而非第一个），
 	// 避免 Juniper cluster 回显中出现的提示符提前截断输出
 	lastPromptIdx := -1
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == prompt || strings.HasSuffix(trimmed, prompt) {
-			lastPromptIdx = i
+	if firepower && prompt == ">" {
+		// Firepower FTD: prompt is ">", take the LAST ">" from end
+		for i := len(lines) - 1; i >= 0; i-- {
+			if strings.TrimSpace(lines[i]) == ">" {
+				lastPromptIdx = i
+				break
+			}
+		}
+	} else {
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == prompt || strings.HasSuffix(trimmed, prompt) {
+				lastPromptIdx = i
+			}
 		}
 	}
 
