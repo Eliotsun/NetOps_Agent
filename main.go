@@ -574,9 +574,11 @@ func waitForPrompt(buf *bytes.Buffer, stdin io.Writer, prompt string, startFrom 
 		// 检测 ---- More ----（Cisco）或 --More--（Fortinet/H3C等）并发送空格翻页
 		moreFound := false
 		for _, line := range lines {
-			if strings.Contains(line, "---- More ----") || strings.Contains(line, "--More--") || strings.Contains(line, "<--- More --->") || strings.Contains(line, "---(more)---") || strings.Contains(line, "---(more)---") || strings.Contains(line, "---(more)---") || strings.Contains(line, "---(more)---") {
+			if strings.Contains(line, "---- More ----") || strings.Contains(line, "--More--") || strings.Contains(line, "<--- More --->") || strings.Contains(line, "---(more)---") {
 				pos = buf.Len()
-				stdin.Write([]byte(" "))
+				// 空格翻页 + 回车兜底：部分 Cisco IOS-XE 分页器只对换行输入响应
+				stdin.Write([]byte(" \n"))
+				fmt.Fprintf(os.Stderr, "[PAGER] More detected, sent ' \\n', pos=%d line=%q\n", pos, line)
 				time.Sleep(10 * time.Millisecond)
 				moreFound = true
 				break

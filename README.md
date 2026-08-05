@@ -224,6 +224,7 @@ netagent/
 |------|------|---------|
 | `enable` 密码被拒（Access denied） | `\r\n` 在 `aaa new-model` 设备上被 ICRNL 转成 `\n\n` 导致密码变形 | `enable` 和密码都改用 `\n` 结尾 |
 | 命令等待 120s 超时 | 翻页空格回显导致 200ms 稳定检测持续循环 | 稳定检测改为重新验证提示符仍在末尾 |
+| 思科 IOS-XE 分页卡死（120s 超时） | 设备 tty 行缓冲：翻页输入裸空格 `" "` 被缓冲、不送达分页器，设备持续用退格序列重绘 `--More--` | 翻页输入改为 `" \n"`（空格翻页 + 换行 flush 兜底），检测时打 `[PAGER]` 日志 |
 | 配置内容误判为权限错误 | `re.search(r'% Invalid input', output)` 全文匹配 | 加 `^` 行首锚定 + `re.MULTILINE` |
 | 配置含 `authentication failure` 中断采集 | `hasAuthFailureStrict` 检测到配置行中的关键字 | 改为 `HasPrefix` 行首匹配 |
 | 设备无输出（no output received） | `ECHO: 0` 导致部分设备不发送 banner | `ECHO` 保持为 `1` |
