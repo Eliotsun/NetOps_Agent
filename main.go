@@ -318,6 +318,9 @@ func executeSSH(host string, port int, username string, password string, enableP
 
 	// ---- Enable 提权（Firepower FTD 无 enable 命令，跳过） ----
 	if enable && !firepower {
+		enableSuccess := false
+
+		// 1) 先试 enable：IOS 等设备 enable 密码正确时直接进特权态
 		fmt.Fprintf(os.Stderr, "[ENABLE] Sending enable command...\n")
 		beforeLen := buf.Len()
 		stdin.Write([]byte("enable\n"))
@@ -325,7 +328,7 @@ func executeSSH(host string, port int, username string, password string, enableP
 		enableStart := time.Now()
 		enableTimeout := 10 * time.Second
 		passwordSent := false
-		enableSuccess := false
+		enableDenied := false
 
 		for time.Since(enableStart) < enableTimeout {
 			time.Sleep(200 * time.Millisecond)
@@ -334,10 +337,17 @@ func executeSSH(host string, port int, username string, password string, enableP
 			newSinceCmd := currentOutput[beforeLen:]
 			lowerNew := strings.ToLower(newSinceCmd)
 
-			// Detect password prompt and send password
+			// 密码被拒（错误密码）→ 不再重试，直接走 login 回退
+			if strings.Contains(lowerNew, "invalid password") || strings.Contains(lowerNew, "access denied") ||
+				strings.Contains(lowerNew, "bad passwords") {
+				enableDenied = true
+				break
+			}
+
+			// 检测密码提示并发送一次 enable 密码
 			if !passwordSent && (strings.Contains(lowerNew, "password:") || strings.Contains(lowerNew, "password：")) {
 				if enablePass == "" {
-					fmt.Fprintf(os.Stderr, "[ENABLE] Device requests enable password but none provided, sending empty line and continuing\n")
+					fmt.Fprintf(os.Stderr, "[ENABLE] Device requests enable password but none provided, sending empty line\n")
 					stdin.Write([]byte("\n"))
 					passwordSent = true
 					continue
@@ -348,7 +358,7 @@ func executeSSH(host string, port int, username string, password string, enableP
 				continue
 			}
 
-			// Check if prompt changed (no longer ends with >)
+			// 提示符变化（不再以 > 结尾）→ enable 成功
 			candidate := extractPrompt(currentOutput)
 			if !strings.HasSuffix(candidate, ">") && candidate != prompt {
 				fmt.Fprintf(os.Stderr, "[ENABLE] Prompt changed: '%s'\n", candidate)
@@ -357,17 +367,73 @@ func executeSSH(host string, port int, username string, password string, enableP
 				break
 			}
 
-			// Log waiting status every 2 seconds
 			elapsed := time.Since(enableStart).Seconds()
 			if elapsed >= 2 && int(elapsed)%2 == 0 {
 				fmt.Fprintf(os.Stderr, "[ENABLE] Waiting for enable to complete, %.0fs elapsed\n", elapsed)
 			}
 		}
 
-		if !enableSuccess {
-			finalPrompt := extractPrompt(buf.String())
-			fmt.Fprintf(os.Stderr, "[ENABLE] Enable timeout (%s), extracted prompt: '%s'\n", time.Since(enableStart).Round(time.Second), finalPrompt)
-			prompt = finalPrompt
+		if enableSuccess {
+			fmt.Fprintf(os.Stderr, "[ENABLE] Privilege mode reached via enable\n")
+		} else {
+			// 2) enable 未到特权态 → 尝试 login 重认证（ASA 等 enable 密码未知的设备）
+			if enableDenied {
+				fmt.Fprintf(os.Stderr, "[ENABLE] Enable password rejected, falling back to 'login'\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "[ENABLE] Enable timeout, falling back to 'login'\n")
+			}
+			// 清掉 enable 残留的 Password: 提示（发空行耗尽剩余尝试，回到用户态提示符）
+			time.Sleep(300 * time.Millisecond)
+			for i := 0; i < 3; i++ {
+				stdin.Write([]byte("\n"))
+				time.Sleep(250 * time.Millisecond)
+			}
+
+			// 发 login 重新认证，用 SSH 账号密码换取特权态（#）
+			loginBefore := buf.Len()
+			stdin.Write([]byte("login\n"))
+			loginStart := time.Now()
+			loginTimeout := 10 * time.Second
+			userSent := false
+			pwdSent := false
+
+			for time.Since(loginStart) < loginTimeout {
+				time.Sleep(200 * time.Millisecond)
+
+				currentOutput := buf.String()
+				newSinceLogin := currentOutput[loginBefore:]
+				lowerNew := strings.ToLower(newSinceLogin)
+
+				// 发送用户名
+				if !userSent && (strings.Contains(lowerNew, "username:") || strings.Contains(lowerNew, "username：")) {
+					fmt.Fprintf(os.Stderr, "[LOGIN] Sending username...\n")
+					stdin.Write([]byte(username + "\n"))
+					userSent = true
+					continue
+				}
+				// 发送密码
+				if !pwdSent && (strings.Contains(lowerNew, "password:") || strings.Contains(lowerNew, "password：")) {
+					fmt.Fprintf(os.Stderr, "[LOGIN] Sending password...\n")
+					stdin.Write([]byte(password + "\n"))
+					pwdSent = true
+					continue
+				}
+
+				// 提示符变化（不再以 > 结尾）→ login 成功
+				candidate := extractPrompt(currentOutput)
+				if !strings.HasSuffix(candidate, ">") && candidate != prompt {
+					fmt.Fprintf(os.Stderr, "[LOGIN] Prompt changed: '%s'\n", candidate)
+					prompt = candidate
+					enableSuccess = true
+					break
+				}
+			}
+
+			if !enableSuccess {
+				finalPrompt := extractPrompt(buf.String())
+				fmt.Fprintf(os.Stderr, "[LOGIN] Login re-auth timeout, extracted prompt: '%s'\n", finalPrompt)
+				prompt = finalPrompt
+			}
 		}
 	}
 	// ---- Enable 提权结束 ----
